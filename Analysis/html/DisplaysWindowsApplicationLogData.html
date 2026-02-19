@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Event Log Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        /* チャートエリアの高さ確保 */
+        .chart-container {
+            position: relative;
+            height: 300px;
+            width: 100%;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 text-gray-800 font-sans h-screen flex flex-col overflow-hidden">
+
+    <div class="container mx-auto p-4 flex-grow flex flex-col h-full">
+        <!-- Header -->
+        <header class="mb-4 flex justify-between items-center flex-shrink-0">
+            <h1 class="text-2xl font-bold text-slate-700">Application Error Dashboard</h1>
+            <div class="flex items-center space-x-4">
+                <label class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded cursor-pointer transition shadow-sm text-sm">
+                    JSONファイルを選択
+                    <input type="file" id="fileInput" accept=".json" class="hidden">
+                </label>
+            </div>
+        </header>
+
+        <!-- KPI Cards -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4 flex-shrink-0">
+            <div class="bg-white p-4 rounded-lg shadow-sm border-l-4 border-blue-500">
+                <p class="text-xs text-gray-500 uppercase font-bold tracking-wider">総エラー件数</p>
+                <p id="totalErrors" class="text-2xl font-bold text-gray-800 mt-1">0</p>
+            </div>
+            <div class="bg-white p-4 rounded-lg shadow-sm border-l-4 border-red-500">
+                <p class="text-xs text-gray-500 uppercase font-bold tracking-wider">最多発生アプリ</p>
+                <p id="topApp" class="text-xl font-bold text-gray-800 mt-1 truncate" title="-">-</p>
+            </div>
+            <div class="bg-white p-4 rounded-lg shadow-sm border-l-4 border-amber-500">
+                <p class="text-xs text-gray-500 uppercase font-bold tracking-wider">集計期間データ数</p>
+                <p id="timeRange" class="text-xl font-bold text-gray-800 mt-1">-</p>
+            </div>
+        </div>
+
+        <!-- Charts Area -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4 flex-shrink-0">
+            <div class="bg-white p-4 rounded-lg shadow-md flex flex-col">
+                <h2 class="text-sm font-bold mb-2 text-gray-700">アプリ別エラー発生数</h2>
+                <div class="chart-container">
+                    <canvas id="appChart"></canvas>
+                </div>
+            </div>
+            <div class="bg-white p-4 rounded-lg shadow-md flex flex-col">
+                <h2 class="text-sm font-bold mb-2 text-gray-700">エラー推移 (時系列)</h2>
+                <div class="chart-container">
+                    <canvas id="trendChart"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <!-- Table Area (Scrollable) -->
+        <div class="bg-white rounded-lg shadow-md flex flex-col flex-grow overflow-hidden border border-gray-200">
+            <div class="p-3 bg-gray-50 border-b border-gray-200 flex-shrink-0">
+                <h2 class="text-sm font-bold text-gray-700">エラー詳細一覧</h2>
+            </div>
+            <div class="overflow-auto flex-grow relative">
+                <table class="min-w-full divide-y divide-gray-200">
+                    <thead class="bg-gray-50 sticky top-0 z-10 shadow-sm">
+                        <tr>
+                            <th class="px-4 py-2 text-left text-xs font-bold text-gray-500 uppercase tracking-wider w-1/6">AppName</th>
+                            <th class="px-4 py-2 text-left text-xs font-bold text-gray-500 uppercase tracking-wider w-1/6">Time</th>
+                            <th class="px-4 py-2 text-left text-xs font-bold text-gray-500 uppercase tracking-wider w-1/2">Message</th>
+                            <th class="px-4 py-2 text-right text-xs font-bold text-gray-500 uppercase tracking-wider w-1/6">Count</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tableBody" class="bg-white divide-y divide-gray-200 text-sm">
+                        <!-- Rows injected here -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // XSS対策関数
+        function escapeHtml(str) {
+            if (!str) return '';
+            return String(str).replace(/[&<>"']/g, function(m) {
+                const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
+                return map[m];
+            });
+        }
+
+        let appChartInstance = null;
+        let trendChartInstance = null;
+        const COLORS = ['#3B82F6', '#EF4444', '#F59E0B', '#10B981', '#6366F1', '#EC4899', '#8B5CF6', '#14B8A6', '#F97316', '#64748B'];
+
+        document.getElementById('fileInput').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(event) {
+                try {
+                    const data = JSON.parse(event.target.result);
+                    if (!Array.isArray(data)) throw new Error("JSON形式が配列ではありません");
+                    updateDashboard(data);
+                } catch (err) {
+                    alert("読み込みエラー: " + err.message);
+                }
+            };
+            reader.readAsText(file);
+        });
+
+        function updateDashboard(data) {
+            // KPI計算
+            const total = data.reduce((sum, item) => sum + item.Count, 0);
+            document.getElementById('totalErrors').innerText = total.toLocaleString();
+
+            const appCounts = {};
+            data.forEach(item => {
+                appCounts[item.AppName] = (appCounts[item.AppName] || 0) + item.Count;
+            });
+
+            // 最多アプリ
+            let topAppName = '-';
+            let maxCount = 0;
+            for (const [name, count] of Object.entries(appCounts)) {
+                if (count > maxCount) {
+                    maxCount = count;
+                    topAppName = name;
+                }
+            }
+            document.getElementById('topApp').innerText = topAppName;
+            document.getElementById('topApp').title = topAppName; // Tooltip用
+
+            const times = [...new Set(data.map(item => item.TimeBucket))].sort();
+            document.getElementById('timeRange').innerText = times.length > 0 ? `${times.length}枠` : '-';
+
+            renderAppChart(appCounts);
+            renderTrendChart(data, times);
+            renderTable(data);
+        }
+
+        function renderAppChart(appCounts) {
+            const ctx = document.getElementById('appChart').getContext('2d');
+            if (appChartInstance) appChartInstance.destroy();
+
+            const sortedApps = Object.entries(appCounts).sort((a, b) => b[1] - a[1]);
+            
+            appChartInstance = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: sortedApps.map(item => item[0]),
+                    datasets: [{
+                        label: 'エラー件数',
+                        data: sortedApps.map(item => item[1]),
+                        backgroundColor: 'rgba(59, 130, 246, 0.7)',
+                        borderColor: 'rgb(59, 130, 246)',
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } }
+                }
+            });
+        }
+
+        function renderTrendChart(data, times) {
+            const ctx = document.getElementById('trendChart').getContext('2d');
+            if (trendChartInstance) trendChartInstance.destroy();
+
+            const uniqueApps = [...new Set(data.map(item => item.AppName))];
+            const lookup = new Map();
+            data.forEach(d => lookup.set(`${d.AppName}_${d.TimeBucket}`, d.Count));
+
+            const datasets = uniqueApps.map((app, index) => ({
+                label: app,
+                data: times.map(t => lookup.get(`${app}_${t}`) || 0),
+                borderColor: COLORS[index % COLORS.length],
+                backgroundColor: COLORS[index % COLORS.length],
+                fill: false,
+                tension: 0.1,
+                pointRadius: 2,
+                borderWidth: 2
+            }));
+
+            trendChartInstance = new Chart(ctx, {
+                type: 'line',
+                data: { labels: times, datasets: datasets },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: { mode: 'index', intersect: false },
+                    plugins: { 
+                        legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 10 } } } 
+                    },
+                    scales: {
+                        x: { ticks: { maxTicksLimit: 10 } } // X軸ラベルが重ならないように間引く
+                    }
+                }
+            });
+        }
+
+        function renderTable(data) {
+            const body = document.getElementById('tableBody');
+            const sortedData = [...data].sort((a, b) => new Date(b.TimeBucket) - new Date(a.TimeBucket));
+
+            // メッセージカラムに div を入れて幅制御を確実にする
+            body.innerHTML = sortedData.map(item => `
+                <tr class="hover:bg-gray-50 transition-colors">
+                    <td class="px-4 py-2 whitespace-nowrap font-medium text-gray-900">${escapeHtml(item.AppName)}</td>
+                    <td class="px-4 py-2 whitespace-nowrap text-gray-500">${item.TimeBucket}</td>
+                    <td class="px-4 py-2">
+                        <div class="max-w-lg break-all text-xs font-mono text-gray-600 bg-gray-50 rounded p-1">
+                            ${escapeHtml(item.メッセージ || item.Message || '')}
+                        </div>
+                    </td>
+                    <td class="px-4 py-2 whitespace-nowrap text-right font-bold text-blue-600">${item.Count.toLocaleString()}</td>
+                </tr>
+            `).join('');
+        }
+    </script>
+</body>
+</html>
