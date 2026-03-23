@@ -1,0 +1,14 @@
+# files.yml - サンプル
+# extensions: 削除対象の拡張子（ドットは不要、必須）
+# keep: ワイルドカード（fnmatch）で除外するファイル名
+
+extensions:
+  - tmp
+  - bak
+  - log
+
+keep:
+  - "important*.log"
+  - "README.md"
+  - ".gitignore"
+  - "secret.*"
