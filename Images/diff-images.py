@@ -1,21 +1,14 @@
-
 from pathlib import Path
 import csv
+import argparse
 
 from PIL import Image
 from pixelmatch import pixelmatch
 
-
 # ==========================================
 # 設定
 # ==========================================
-
 BASE_DIR = Path(__file__).resolve().parent
-
-BEFORE_DIR = BASE_DIR / "before"
-AFTER_DIR = BASE_DIR / "after"
-RESULT_DIR = BASE_DIR / "result"
-
 THRESHOLD = 0.1
 INCLUDE_AA = False
 
@@ -48,18 +41,49 @@ def compare_images(before_path, after_path, diff_path):
     return status, diff_count, match_rate
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="before/after のPNG画像を比較して差分画像とCSVを出力します。"
+    )
+    parser.add_argument(
+        "--before-dir",
+        type=Path,
+        default=BASE_DIR / "before",
+        help="比較元画像フォルダ (default: ./before)",
+    )
+    parser.add_argument(
+        "--after-dir",
+        type=Path,
+        default=BASE_DIR / "after",
+        help="比較先画像フォルダ (default: ./after)",
+    )
+    parser.add_argument(
+        "--result-dir",
+        type=Path,
+        default=BASE_DIR / "result",
+        help="結果出力フォルダ (default: ./result)",
+    )
+    return parser.parse_args()
+
+
 def main():
-    RESULT_DIR.mkdir(parents=True, exist_ok=True)
+    args = parse_args()
+
+    before_dir = args.before_dir
+    after_dir = args.after_dir
+    result_dir = args.result_dir
+
+    result_dir.mkdir(parents=True, exist_ok=True)
 
     before_files = {
         p.name: p
-        for p in BEFORE_DIR.glob("*.png")
+        for p in before_dir.glob("*.png")
         if p.is_file()
     }
 
     after_files = {
         p.name: p
-        for p in AFTER_DIR.glob("*.png")
+        for p in after_dir.glob("*.png")
         if p.is_file()
     }
 
@@ -83,7 +107,7 @@ def main():
             )
 
         else:
-            diff_path = RESULT_DIR / f"{Path(filename).stem}_diff.png"
+            diff_path = result_dir / f"{Path(filename).stem}_diff.png"
 
             try:
                 status, diff_count, match_rate = compare_images(
@@ -111,7 +135,7 @@ def main():
         print(f"{filename}: {status} / 一致率 {rate_text}")
 
     # CSV出力
-    csv_path = RESULT_DIR / "summary.csv"
+    csv_path = result_dir / "summary.csv"
 
     with open(csv_path, "w", newline="", encoding="utf-8-sig") as f:
         writer = csv.writer(f)
